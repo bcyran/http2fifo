@@ -481,6 +481,7 @@ dependencies = [
  "futures-util",
  "nix",
  "reqwest",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",
