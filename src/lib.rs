@@ -18,55 +18,73 @@ use crate::{
 
 /// Mount a single HTTP stream to the FIFO at `config.fifo_path`.
 ///
-/// Execution order:
-///   1. Creates the FIFO (errors if the path already exists).
+/// Runs an indefinite reconnect loop:
+///   1. Creates the FIFO (errors if the path already exists on the first
+///      iteration; on subsequent iterations the previous FIFO has already been
+///      unlinked).
 ///   2. Waits (via non-blocking poll) until a reader opens the FIFO.
 ///   3. Initiates the HTTP request.
 ///   4. Forwards every chunk from the response body into the FIFO.
-///   5. Unlinks the FIFO on all exit paths via an RAII guard.
+///   5. When the HTTP stream ends cleanly: closes the write end (the reader
+///      receives EOF and stops), unlinks the FIFO, then loops back to step 1
+///      so a new reader can open a fresh FIFO and receive the next stream.
+///
+/// The function never returns `Ok(())`. It only returns on cancellation or
+/// error, at which point the FIFO is guaranteed to be unlinked.
 ///
 /// # Errors
 ///
 /// - [`Error::FifoAlreadyExists`] — a filesystem entry already exists at
-///   `config.fifo_path`.
+///   `config.fifo_path` when the first cycle starts.
 /// - [`Error::FifoCreate`] — `mkfifo(2)` failed.
 /// - [`Error::Cancelled`] — `cancel` was cancelled while waiting for a reader
 ///   or while streaming.
 /// - [`Error::Http`] — the HTTP request failed or a chunk could not be read.
 /// - [`Error::Io`] — a FIFO write failed.
 pub async fn mount(config: Config, cancel: CancellationToken) -> Result<()> {
-    // 1. Create the FIFO; the guard unlinks it on every exit path.
-    let _guard = create_fifo(&config.fifo_path)?;
-
-    // 2. Wait for a reader to open the read end.
-    let mut file = open_fifo_write(&config.fifo_path, &cancel).await?;
-
-    // 3. Establish the HTTP connection.
-    let stream = fetch_stream(&config).await?;
-    tokio::pin!(stream);
-
-    // 4. Forward chunks; select! lets cancellation interrupt any chunk wait.
     loop {
-        tokio::select! {
-            chunk = stream.next() => match chunk {
-                Some(Ok(bytes)) => {
-                    // Move `file` into spawn_blocking for the blocking write,
-                    // then move it back out to use in the next iteration.
-                    file = tokio::task::spawn_blocking(move || -> Result<_> {
-                        file.write_all(&bytes)?;
-                        Ok(file)
-                    })
-                    .await
-                    .map_err(|e| Error::Io(std::io::Error::other(e)))??;
-                }
-                Some(Err(e)) => return Err(e),
-                None => return Ok(()), // stream ended cleanly
-            },
-            () = cancel.cancelled() => return Err(Error::Cancelled),
-        }
-    }
+        // Create the FIFO for this cycle.
+        let guard = create_fifo(&config.fifo_path)?;
 
-    // 5. _guard drops here (and on every early-return path above).
+        // Wait for a reader to open the read end.
+        let mut file = open_fifo_write(&config.fifo_path, &cancel).await?;
+
+        // Establish the HTTP connection.
+        let stream = fetch_stream(&config).await?;
+        tokio::pin!(stream);
+
+        // Forward chunks; select! lets cancellation interrupt any chunk wait.
+        let clean_end = loop {
+            tokio::select! {
+                chunk = stream.next() => match chunk {
+                    Some(Ok(bytes)) => {
+                        // Move `file` into spawn_blocking for the blocking write,
+                        // then move it back out to use in the next iteration.
+                        file = tokio::task::spawn_blocking(move || -> Result<_> {
+                            file.write_all(&bytes)?;
+                            Ok(file)
+                        })
+                        .await
+                        .map_err(|e| Error::Io(std::io::Error::other(e)))??;
+                    }
+                    Some(Err(e)) => return Err(e),
+                    None => break true,  // stream ended cleanly
+                },
+                () = cancel.cancelled() => break false,
+            }
+        };
+
+        // Close the write end first so the reader receives EOF, then unlink
+        // the FIFO. Explicit drops make the order clear regardless of
+        // declaration order.
+        drop(file);
+        drop(guard);
+
+        if !clean_end {
+            return Err(Error::Cancelled);
+        }
+        // Loop back: create a fresh FIFO and wait for the next reader.
+    }
 }
 
 /// Mount multiple HTTP streams concurrently, one FIFO per config entry.

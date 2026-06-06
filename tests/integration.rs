@@ -50,6 +50,10 @@ fn spawn_reader(path: PathBuf) -> JoinHandle<Vec<u8>> {
 // ---------------------------------------------------------------------------
 
 /// A mock that streams a fixed payload is received byte-for-byte via the FIFO.
+///
+/// `mount` loops indefinitely, so it is run as a background task and cancelled
+/// once the reader has received its EOF (i.e. after the first HTTP stream ends
+/// and the write end is closed).
 #[tokio::test]
 async fn happy_path() {
     let payload: &[u8] = b"hello from http2fifo";
@@ -67,11 +71,18 @@ async fn happy_path() {
     let reader = spawn_reader(fifo_path.clone());
 
     let cancel = CancellationToken::new();
-    mount(make_config(server.uri(), fifo_path), cancel)
-        .await
-        .expect("mount failed");
+    let token = cancel.clone();
+    let mount_handle = tokio::spawn(mount(make_config(server.uri(), fifo_path), cancel));
 
+    // Reader gets EOF when the first stream ends and mount closes the write end.
     assert_eq!(reader.await.unwrap(), payload);
+
+    // Cancel mount (it is now waiting for a second reader).
+    token.cancel();
+    assert!(
+        matches!(mount_handle.await.unwrap(), Err(Error::Cancelled)),
+        "expected mount to return Err(Cancelled) after token cancel"
+    );
 }
 
 /// Cancelling the token mid-stream returns `Err(Cancelled)` and unlinks the
@@ -111,6 +122,9 @@ async fn cancellation() {
 }
 
 /// Two mounts run concurrently; each FIFO delivers its own payload correctly.
+///
+/// `mount_all` loops indefinitely; it is run as a background task and
+/// cancelled once both readers have finished their first reads.
 #[tokio::test]
 async fn multi_mount() {
     let payload_a: &[u8] = b"stream-alpha";
@@ -143,16 +157,22 @@ async fn multi_mount() {
     ];
 
     let cancel = CancellationToken::new();
-    let results = mount_all(configs, cancel, false).await;
+    let token = cancel.clone();
+    let mount_handle = tokio::spawn(mount_all(configs, cancel, false));
 
-    for (path, result) in &results {
-        if let Err(e) = result {
-            panic!("mount {path:?} failed: {e}");
-        }
-    }
-
+    // Both readers get EOF after their first HTTP streams end.
     assert_eq!(reader_a.await.unwrap(), payload_a);
     assert_eq!(reader_b.await.unwrap(), payload_b);
+
+    // Cancel all mounts (they are waiting for second readers).
+    token.cancel();
+    let results = mount_handle.await.unwrap();
+    for (path, result) in &results {
+        assert!(
+            matches!(result, Err(Error::Cancelled)),
+            "expected Err(Cancelled) for mount {path:?}, got {result:?}"
+        );
+    }
 }
 
 /// With `fail_fast = true`, the first mount error cancels all remaining mounts.
