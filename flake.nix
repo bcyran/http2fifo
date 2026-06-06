@@ -29,6 +29,7 @@
           (rust-bin.fromRustupToolchainFile ./rust-toolchain.toml)
           cargo-llvm-cov
           just
+          rust-analyzer
         ];
 
         nativeBuildInputs = with pkgs; [
