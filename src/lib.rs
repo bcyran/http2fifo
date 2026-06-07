@@ -36,7 +36,6 @@ use crate::{
 ///
 /// - [`Error::FifoAlreadyExists`] — a filesystem entry already exists at
 ///   `config.fifo_path` when the first cycle starts.
-/// - [`Error::FifoCreate`] — `mkfifo(2)` failed.
 /// - [`Error::Cancelled`] — `cancel` was cancelled while waiting for a reader
 ///   or while streaming.
 /// - [`Error::Http`] — the HTTP request failed or a chunk could not be read.

@@ -29,15 +29,14 @@ impl Drop for FifoGuard {
 ///
 /// - [`Error::FifoAlreadyExists`] — any filesystem entry already exists at
 ///   `path` (regular file, directory, symlink, or existing FIFO).
-/// - [`Error::FifoCreate`] — the `mkfifo(2)` syscall failed for any other
-///   reason.
+/// - [`Error::Io`] — the `mkfifo(2)` syscall failed for any other reason.
 pub fn create_fifo(path: &Path) -> Result<FifoGuard> {
     if path.symlink_metadata().is_ok() {
         return Err(Error::FifoAlreadyExists(path.to_owned()));
     }
 
     mknodat(CWD, path, FileType::Fifo, Mode::RUSR | Mode::WUSR, 0)
-        .map_err(|e| Error::FifoCreate(e.into()))?;
+        .map_err(|e| Error::Io(e.into()))?;
     tracing::debug!(path = %path.display(), "FIFO created");
     Ok(FifoGuard(path.to_owned()))
 }

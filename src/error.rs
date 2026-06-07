@@ -1,4 +1,4 @@
-use std::{io, path::PathBuf};
+use std::path::PathBuf;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -6,11 +6,7 @@ pub enum Error {
     #[error("path already exists: {0}")]
     FifoAlreadyExists(PathBuf),
 
-    /// The `mkfifo(2)` syscall failed.
-    #[error("failed to create FIFO: {0}")]
-    FifoCreate(io::Error),
-
-    /// An I/O error during FIFO open or write.
+    /// An I/O error during FIFO create, open, or write.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
