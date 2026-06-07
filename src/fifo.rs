@@ -19,6 +19,7 @@ pub struct FifoGuard(PathBuf);
 
 impl Drop for FifoGuard {
     fn drop(&mut self) {
+        tracing::debug!(path = %self.0.display(), "unlinking FIFO");
         let _ = std::fs::remove_file(&self.0); // best-effort; silence errors
     }
 }
@@ -38,7 +39,7 @@ pub fn create_fifo(path: &Path) -> Result<FifoGuard> {
     }
 
     mkfifo(path, Mode::S_IRUSR | Mode::S_IWUSR).map_err(Error::FifoCreate)?;
-
+    tracing::debug!(path = %path.display(), "FIFO created");
     Ok(FifoGuard(path.to_owned()))
 }
 
@@ -81,12 +82,14 @@ fn open_fifo_write_blocking(path: &Path, cancel: &CancellationToken) -> Result<F
                 fcntl(fd, FcntlArg::F_SETFL(blocking_flags))
                     .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
 
+                tracing::debug!(path = %path.display(), "write end opened");
                 // SAFETY: `fd` is a valid, open file descriptor we own.
                 return Ok(unsafe { File::from_raw_fd(fd as RawFd) });
             }
 
             Err(nix::errno::Errno::ENXIO) => {
                 // No reader yet — check for cancellation then wait.
+                tracing::trace!(path = %path.display(), "no reader yet, retrying");
                 if cancel.is_cancelled() {
                     return Err(Error::Cancelled);
                 }

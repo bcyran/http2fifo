@@ -42,14 +42,17 @@ use crate::{
 /// - [`Error::Http`] — the HTTP request failed or a chunk could not be read.
 /// - [`Error::Io`] — a FIFO write failed.
 pub async fn mount(config: Config, cancel: CancellationToken) -> Result<()> {
+    tracing::debug!(path = %config.fifo_path.display(), url = %config.url, "mount started");
     loop {
         // Create the FIFO for this cycle.
         let guard = create_fifo(&config.fifo_path)?;
 
         // Wait for a reader to open the read end.
+        tracing::debug!(path = %config.fifo_path.display(), "waiting for reader");
         let mut file = open_fifo_write(&config.fifo_path, &cancel).await?;
 
         // Establish the HTTP connection.
+        tracing::debug!(path = %config.fifo_path.display(), url = %config.url, "reader connected, fetching stream");
         let stream = fetch_stream(&config).await?;
         tokio::pin!(stream);
 
@@ -60,6 +63,7 @@ pub async fn mount(config: Config, cancel: CancellationToken) -> Result<()> {
                     Some(Ok(bytes)) => {
                         // Move `file` into spawn_blocking for the blocking write,
                         // then move it back out to use in the next iteration.
+                        tracing::trace!(path = %config.fifo_path.display(), bytes = bytes.len(), "chunk");
                         file = tokio::task::spawn_blocking(move || -> Result<_> {
                             file.write_all(&bytes)?;
                             Ok(file)
@@ -83,6 +87,7 @@ pub async fn mount(config: Config, cancel: CancellationToken) -> Result<()> {
         if !clean_end {
             return Err(Error::Cancelled);
         }
+        tracing::debug!(path = %config.fifo_path.display(), "stream ended cleanly, restarting");
         // Loop back: create a fresh FIFO and wait for the next reader.
     }
 }
@@ -104,6 +109,7 @@ pub async fn mount_all(
     cancel: CancellationToken,
     fail_fast: bool,
 ) -> Vec<(PathBuf, Result<()>)> {
+    tracing::info!(count = configs.len(), "mounting stream(s)");
     let handles: Vec<(PathBuf, JoinHandle<Result<()>>)> = configs
         .into_iter()
         .map(|config| {

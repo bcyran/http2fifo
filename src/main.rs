@@ -12,6 +12,30 @@ use tokio_util::sync::CancellationToken;
 
 use http2fifo::{config::Config, error::Error, mount_all};
 
+/// Logging verbosity level for `--log-level`.
+#[derive(Clone, clap::ValueEnum)]
+enum LogLevel {
+    Off,
+    Error,
+    Warn,
+    Info,
+    Debug,
+    Trace,
+}
+
+impl LogLevel {
+    const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Error => "error",
+            Self::Warn => "warn",
+            Self::Info => "info",
+            Self::Debug => "debug",
+            Self::Trace => "trace",
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(
     name = "http2fifo",
@@ -46,11 +70,16 @@ struct Cli {
     /// Cancel all mounts if any one fails
     #[arg(long)]
     fail_fast: bool,
+
+    /// Logging verbosity; overrides `RUST_LOG` when set
+    #[arg(long, value_name = "LEVEL")]
+    log_level: Option<LogLevel>,
 }
 
 #[tokio::main]
 async fn main() {
     let cli = Cli::parse();
+    init_tracing(cli.log_level);
 
     let fail_fast = cli.fail_fast;
     let method = parse_method(&cli.method);
@@ -69,6 +98,19 @@ async fn main() {
         got_sigterm.load(Ordering::Relaxed),
         &results,
     ));
+}
+
+/// Install the `tracing-subscriber`. If `log_level` is given it takes
+/// precedence over `RUST_LOG`; otherwise `RUST_LOG` is used (and if that is
+/// also unset, logging is silent).
+fn init_tracing(log_level: Option<LogLevel>) {
+    let filter = log_level.map_or_else(tracing_subscriber::EnvFilter::from_default_env, |l| {
+        tracing_subscriber::EnvFilter::new(l.as_str())
+    });
+    tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .init();
 }
 
 /// Parse an HTTP method string. Exits with code 1 on invalid input.

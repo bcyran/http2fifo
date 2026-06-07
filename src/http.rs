@@ -14,6 +14,7 @@ use crate::{
 ///   timeout), the server returned a non-2xx status, or a chunk could not be
 ///   read from the response body.
 pub async fn fetch_stream(config: &Config) -> Result<impl Stream<Item = Result<bytes::Bytes>>> {
+    tracing::debug!(method = %config.method, url = %config.url, "sending request");
     let client = reqwest::Client::new();
 
     let mut builder = client.request(config.method.clone(), &config.url);
@@ -26,7 +27,9 @@ pub async fn fetch_stream(config: &Config) -> Result<impl Stream<Item = Result<b
         builder = builder.body(body);
     }
 
-    let response = builder.send().await?.error_for_status()?;
+    let response = builder.send().await?;
+    tracing::debug!(status = %response.status(), url = %config.url, "response received");
+    let response = response.error_for_status()?;
 
     Ok(response.bytes_stream().map(|r| r.map_err(Error::Http)))
 }
