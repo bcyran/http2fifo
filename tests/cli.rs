@@ -65,7 +65,7 @@ mod run {
     use tokio::task::JoinHandle;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path},
+        matchers::{body_bytes, header, method, path},
     };
 
     fn spawn_reader(path: PathBuf) -> JoinHandle<Vec<u8>> {
@@ -84,6 +84,36 @@ mod run {
             .await
             .expect("reader task panicked")
         })
+    }
+
+    /// Spawn the binary with `extra_args` followed by `server_uri` and a
+    /// fresh temporary FIFO path, wait for the FIFO to be fully read, kill
+    /// the binary, and return the bytes that were written to the FIFO.
+    async fn run_and_collect(extra_args: &[&str], server_uri: &str) -> Vec<u8> {
+        let dir = TempDir::new().expect("failed to create tempdir");
+        let fifo_path = dir.path().join("stream.fifo");
+        let fifo_arg = fifo_path.to_string_lossy().into_owned();
+
+        let reader = spawn_reader(fifo_path.clone());
+
+        let mut child = TokioCommand::new(binary_path())
+            .args(extra_args)
+            .arg(server_uri)
+            .arg(&fifo_arg)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn CLI binary");
+
+        let bytes = tokio::time::timeout(Duration::from_secs(5), reader)
+            .await
+            .expect("reader timed out")
+            .expect("reader join failed");
+
+        child.start_kill().ok();
+        let _ = tokio::time::timeout(Duration::from_secs(5), child.wait_with_output()).await;
+
+        bytes
     }
 
     /// The binary streams a payload byte-for-byte to the FIFO and then
@@ -170,5 +200,55 @@ mod run {
         let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(stderr.contains(&format!("error: {}:", fifo_path.display())));
         assert!(!fifo_path.exists(), "FIFO should be unlinked on failure");
+    }
+
+    /// `-X <METHOD>` is forwarded to the HTTP request. The mock only matches
+    /// the specified method; a wrong method would yield 404 and fail the test.
+    #[tokio::test]
+    async fn custom_method_is_used() {
+        let payload: &[u8] = b"post response";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload))
+            .mount(&server)
+            .await;
+
+        let bytes = run_and_collect(&["-X", "POST"], &server.uri()).await;
+        assert_eq!(bytes, payload);
+    }
+
+    /// `-H name:value` is forwarded as a request header. The mock only matches
+    /// when the header is present; a missing header would yield 404.
+    #[tokio::test]
+    async fn custom_header_is_forwarded() {
+        let payload: &[u8] = b"header response";
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/"))
+            .and(header("x-token", "secret"))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload))
+            .mount(&server)
+            .await;
+
+        let bytes = run_and_collect(&["-H", "x-token: secret"], &server.uri()).await;
+        assert_eq!(bytes, payload);
+    }
+
+    /// `-d <DATA>` is sent as the request body. The mock only matches the
+    /// exact body bytes; a wrong or missing body would yield 404.
+    #[tokio::test]
+    async fn custom_body_is_sent() {
+        let payload: &[u8] = b"body accepted";
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/"))
+            .and(body_bytes(b"my-data".to_vec()))
+            .respond_with(ResponseTemplate::new(200).set_body_bytes(payload))
+            .mount(&server)
+            .await;
+
+        let bytes = run_and_collect(&["-X", "POST", "-d", "my-data"], &server.uri()).await;
+        assert_eq!(bytes, payload);
     }
 }
