@@ -8,6 +8,7 @@
   };
 
   outputs = {
+    self,
     nixpkgs,
     rust-overlay,
     ...
@@ -22,7 +23,13 @@
             rust-overlay.overlays.default
           ];
         }));
+    rev = self.shortRev or self.dirtyShortRev or "dirty";
   in {
+    packages = forEachSystem (pkgs: rec {
+      http2fifo = pkgs.callPackage ./nix/package.nix {inherit rev;};
+      default = http2fifo;
+    });
+
     devShells = forEachSystem (pkgs: {
       default = pkgs.mkShell {
         packages = with pkgs; [
