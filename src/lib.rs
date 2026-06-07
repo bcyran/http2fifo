@@ -38,7 +38,7 @@ use crate::{
 ///   `config.fifo_path` when the first cycle starts.
 /// - [`Error::Cancelled`] — `cancel` was cancelled while waiting for a reader
 ///   or while streaming.
-/// - [`Error::Http`] — the HTTP request failed or a chunk could not be read.
+/// - [`Error::Request`] — the HTTP request failed or a chunk could not be read.
 /// - [`Error::Io`] — a FIFO write failed.
 pub async fn mount(config: Config, cancel: CancellationToken) -> Result<()> {
     tracing::debug!(path = %config.fifo_path.display(), url = %config.url, "mount started");

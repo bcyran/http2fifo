@@ -185,7 +185,7 @@ mod mount_all {
     /// With `fail_fast = true`, the first mount error cancels all remaining
     /// mounts.
     ///
-    /// Mount A: server returns 500 → `Err(Http(…))`.
+    /// Mount A: server returns 500 → `Err(Request(…))`.
     /// Mount B: large body that cannot finish before cancellation →
     /// `Err(Cancelled)`.
     #[tokio::test]
@@ -225,8 +225,8 @@ mod mount_all {
         let result_b = &results[1].1;
 
         assert!(
-            matches!(result_a, Err(Error::Http(_))),
-            "expected Err(Http) for mount A, got {result_a:?}"
+            matches!(result_a, Err(Error::Request(_))),
+            "expected Err(Request) for mount A, got {result_a:?}"
         );
         assert!(
             matches!(result_b, Err(Error::Cancelled)),

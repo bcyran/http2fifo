@@ -12,7 +12,7 @@ pub enum Error {
 
     /// A `reqwest` error during request or streaming.
     #[error("request error: {0}")]
-    Http(#[from] reqwest::Error),
+    Request(#[from] reqwest::Error),
 
     /// The operation was cancelled via `CancellationToken`.
     #[error("cancelled")]

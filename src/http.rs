@@ -10,7 +10,7 @@ use crate::{
 ///
 /// # Errors
 ///
-/// - [`Error::Http`] — the request could not be sent (DNS, connection, TLS,
+/// - [`Error::Request`] — the request could not be sent (DNS, connection, TLS,
 ///   timeout), the server returned a non-2xx status, or a chunk could not be
 ///   read from the response body.
 pub async fn fetch_stream(config: &Config) -> Result<impl Stream<Item = Result<bytes::Bytes>>> {
@@ -31,7 +31,7 @@ pub async fn fetch_stream(config: &Config) -> Result<impl Stream<Item = Result<b
     tracing::debug!(status = %response.status(), url = %config.url, "response received");
     let response = response.error_for_status()?;
 
-    Ok(response.bytes_stream().map(|r| r.map_err(Error::Http)))
+    Ok(response.bytes_stream().map(|r| r.map_err(Error::Request)))
 }
 
 #[cfg(test)]
@@ -94,8 +94,8 @@ mod tests {
         let result = fetch_stream(&config).await;
 
         assert!(
-            matches!(result, Err(Error::Http(_))),
-            "expected Err(Error::Http), got Ok(_)"
+            matches!(result, Err(Error::Request(_))),
+            "expected Err(Error::Request), got Ok(_)"
         );
     }
 
