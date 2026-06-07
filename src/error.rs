@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{io, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -8,7 +8,7 @@ pub enum Error {
 
     /// The `mkfifo(2)` syscall failed.
     #[error("failed to create FIFO: {0}")]
-    FifoCreate(nix::Error),
+    FifoCreate(io::Error),
 
     /// An I/O error during FIFO open or write.
     #[error("I/O error: {0}")]

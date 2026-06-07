@@ -1,14 +1,12 @@
 use std::{
     fs::File,
-    os::unix::io::{FromRawFd, RawFd},
     path::{Path, PathBuf},
     time::Duration,
 };
 
-use nix::{
-    fcntl::{FcntlArg, OFlag, fcntl, open},
-    sys::stat::Mode,
-    unistd::mkfifo,
+use rustix::{
+    fs::{CWD, FileType, Mode, OFlags, fcntl_getfl, fcntl_setfl, mknodat, open},
+    io::Errno,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -38,7 +36,8 @@ pub fn create_fifo(path: &Path) -> Result<FifoGuard> {
         return Err(Error::FifoAlreadyExists(path.to_owned()));
     }
 
-    mkfifo(path, Mode::S_IRUSR | Mode::S_IWUSR).map_err(Error::FifoCreate)?;
+    mknodat(CWD, path, FileType::Fifo, Mode::RUSR | Mode::WUSR, 0)
+        .map_err(|e| Error::FifoCreate(e.into()))?;
     tracing::debug!(path = %path.display(), "FIFO created");
     Ok(FifoGuard(path.to_owned()))
 }
@@ -73,21 +72,17 @@ pub async fn open_fifo_write(path: &Path, cancel: &CancellationToken) -> Result<
 
 fn open_fifo_write_blocking(path: &Path, cancel: &CancellationToken) -> Result<File> {
     loop {
-        match open(path, OFlag::O_WRONLY | OFlag::O_NONBLOCK, Mode::empty()) {
+        match open(path, OFlags::WRONLY | OFlags::NONBLOCK, Mode::empty()) {
             Ok(fd) => {
                 // Clear O_NONBLOCK so writes block and provide backpressure.
-                let flags = fcntl(fd, FcntlArg::F_GETFL)
-                    .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
-                let blocking_flags = OFlag::from_bits_truncate(flags) & !OFlag::O_NONBLOCK;
-                fcntl(fd, FcntlArg::F_SETFL(blocking_flags))
-                    .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
+                let flags = fcntl_getfl(&fd).map_err(|e| Error::Io(e.into()))?;
+                fcntl_setfl(&fd, flags & !OFlags::NONBLOCK).map_err(|e| Error::Io(e.into()))?;
 
                 tracing::debug!(path = %path.display(), "write end opened");
-                // SAFETY: `fd` is a valid, open file descriptor we own.
-                return Ok(unsafe { File::from_raw_fd(fd as RawFd) });
+                return Ok(File::from(fd));
             }
 
-            Err(nix::errno::Errno::ENXIO) => {
+            Err(Errno::NXIO) => {
                 // No reader yet — check for cancellation then wait.
                 tracing::trace!(path = %path.display(), "no reader yet, retrying");
                 if cancel.is_cancelled() {
@@ -97,7 +92,7 @@ fn open_fifo_write_blocking(path: &Path, cancel: &CancellationToken) -> Result<F
             }
 
             Err(e) => {
-                return Err(Error::Io(std::io::Error::from_raw_os_error(e as i32)));
+                return Err(Error::Io(e.into()));
             }
         }
     }
@@ -107,10 +102,9 @@ fn open_fifo_write_blocking(path: &Path, cancel: &CancellationToken) -> Result<F
 mod tests {
     use std::fs;
     use std::os::unix::fs::FileTypeExt;
-    use std::os::unix::io::FromRawFd;
     use std::time::Duration;
 
-    use nix::fcntl::open;
+    use rustix::fs::{Mode, OFlags, open};
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -182,9 +176,9 @@ mod tests {
 
         // Open the read end with O_NONBLOCK so it succeeds immediately without
         // waiting for a writer, giving open_fifo_write a reader to find.
-        let rfd = open(&path, OFlag::O_RDONLY | OFlag::O_NONBLOCK, Mode::empty())
+        let rfd = open(&path, OFlags::RDONLY | OFlags::NONBLOCK, Mode::empty())
             .expect("open read end failed");
-        let _reader = unsafe { fs::File::from_raw_fd(rfd) };
+        let _reader = fs::File::from(rfd);
 
         let result = open_fifo_write(&path, &cancel).await;
         assert!(result.is_ok(), "expected Ok, got {result:?}");
