@@ -1,8 +1,6 @@
 {
   lib,
   rustPlatform,
-  pkg-config,
-  openssl,
   rev ? "dirty",
 }: let
   cargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
@@ -23,10 +21,6 @@ in
     };
 
     cargoLock.lockFile = ../Cargo.lock;
-
-    nativeBuildInputs = [pkg-config];
-
-    buildInputs = [openssl];
 
     meta = {
       description = "Mount an HTTP streaming resource as a Unix named pipe (FIFO)";
