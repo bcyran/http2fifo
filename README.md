@@ -30,6 +30,12 @@ nix build
 # binary: result/bin/http2fifo
 ```
 
+Or run directly without installing:
+
+```bash
+nix run github:bcyran/http2fifo -- https://ice4.somafm.com/dubstep-256-mp3 /tmp/dubstep.fifo
+```
+
 ## Usage
 
 ### Single stream
